@@ -1,0 +1,17 @@
+# Build output
+build/
+dist/
+DerivedData/
+*.xcarchive
+
+# Xcode local state
+xcuserdata/
+*.xcuserstate
+*.xcscmblueprint
+*.xccheckout
+*.moved-aside
+.swiftpm/
+AirRefresh.xcodeproj/project.xcworkspace/xcshareddata/IDEWorkspaceChecks.plist
+
+# macOS
+.DS_Store

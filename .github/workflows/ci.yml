@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Build and test
+    runs-on: macos-15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+
+      - name: Test
+        run: |
+          set -o pipefail
+          xcodebuild test \
+            -project AirRefresh.xcodeproj \
+            -scheme AirRefresh \
+            -configuration Debug \
+            -destination 'platform=macOS' \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Build Release
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -project AirRefresh.xcodeproj \
+            -scheme AirRefresh \
+            -configuration Release \
+            -destination 'platform=macOS' \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Icon generator still runs
+        run: |
+          swift Tools/GenerateAppIcon.swift
+          test -s AirRefresh/Assets.xcassets/AppIcon.appiconset/icon_512x512@2x.png
+          # Not diffed against the committed PNGs on purpose: CoreGraphics
+          # rasterises a hair differently between macOS versions, and a
+          # sub-pixel change in an icon is not a broken build.

@@ -1,0 +1,35 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish
+    runs-on: macos-15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        run: ./Scripts/build-release.sh
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" dist/*.zip \
+            --title "${GITHUB_REF_NAME}" \
+            --notes "AirRefresh ${GITHUB_REF_NAME}
+
+          The app is ad-hoc signed, so macOS will ask before opening it the first time:
+          right-click the app and choose Open, or run
+
+              xattr -dr com.apple.quarantine /Applications/AirRefresh.app
+
+          See the README for the rest."

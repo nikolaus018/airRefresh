@@ -1,0 +1,190 @@
+import Foundation
+
+/// One of the (at most three) Xcode projects AirRefresh can push to a device.
+struct ProjectSlot: Identifiable, Codable, Hashable {
+
+    var id: UUID = UUID()
+    var name: String = ""
+    /// Absolute path to an `.xcodeproj` or `.xcworkspace`.
+    var projectPath: String = ""
+    var scheme: String = ""
+    var configuration: String = "Debug"
+    /// Hardware UDID — what `xcodebuild -destination id=…` expects.
+    var deviceUDID: String = ""
+    /// CoreDevice identifier — what `devicectl --device` expects.
+    var deviceIdentifier: String = ""
+    var deviceName: String = ""
+
+    var resetSigning: Bool = true
+    var cleanBuild: Bool = false
+    var launchAfterInstall: Bool = true
+
+    /// Let the scheduler keep this project alive on its own.
+    var autoRefresh: Bool = true
+    /// Learned from the build, so we can find the matching profile afterwards.
+    var bundleIdentifier: String = ""
+    /// Expiry of the profile covering `bundleIdentifier`, when we know it.
+    var profileExpiresAt: Date?
+    var lastSuccessAt: Date?
+
+    var isConfigured: Bool {
+        !projectPath.isEmpty && !scheme.isEmpty && !deviceIdentifier.isEmpty
+    }
+
+    var displayName: String {
+        if !name.isEmpty { return name }
+        guard !projectPath.isEmpty else { return "Empty slot" }
+        return URL(fileURLWithPath: projectPath).deletingPathExtension().lastPathComponent
+    }
+
+    var isWorkspace: Bool { projectPath.hasSuffix(".xcworkspace") }
+
+    init() {}
+
+    /// Hand-written so slots saved by an older build still load: Swift's
+    /// synthesized decoder throws on a missing key even when the property has a
+    /// default, which would quietly wipe everyone's configuration on upgrade.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        func value<T: Decodable>(_ key: CodingKeys, _ fallback: T) -> T {
+            (try? container.decodeIfPresent(T.self, forKey: key)) .flatMap { $0 } ?? fallback
+        }
+        id = value(.id, UUID())
+        name = value(.name, "")
+        projectPath = value(.projectPath, "")
+        scheme = value(.scheme, "")
+        configuration = value(.configuration, "Debug")
+        deviceUDID = value(.deviceUDID, "")
+        deviceIdentifier = value(.deviceIdentifier, "")
+        deviceName = value(.deviceName, "")
+        resetSigning = value(.resetSigning, true)
+        cleanBuild = value(.cleanBuild, false)
+        launchAfterInstall = value(.launchAfterInstall, true)
+        autoRefresh = value(.autoRefresh, true)
+        bundleIdentifier = value(.bundleIdentifier, "")
+        profileExpiresAt = try? container.decodeIfPresent(Date.self, forKey: .profileExpiresAt)
+        lastSuccessAt = try? container.decodeIfPresent(Date.self, forKey: .lastSuccessAt)
+    }
+
+    var containerFlag: String { isWorkspace ? "-workspace" : "-project" }
+
+    /// Whole days until the signing profile dies, floored at zero so the
+    /// scheduler never has to reason about negative time. `nil` while unknown.
+    /// A profile that has already lapsed reads as `0` — ask ``hasExpired`` to
+    /// tell the two apart.
+    var daysUntilExpiry: Int? {
+        guard let expiry = profileExpiresAt else { return nil }
+        return max(0, Int(expiry.timeIntervalSinceNow / 86_400))
+    }
+
+    /// The profile is gone, not merely close. Kept separate from
+    /// `daysUntilExpiry == 0` so the UI can say "Expired" instead of claiming
+    /// an app that stopped working last week expires later today.
+    var hasExpired: Bool {
+        guard let expiry = profileExpiresAt else { return false }
+        return expiry <= Date()
+    }
+
+    /// Automation only takes over once a manual run has proved the slot works.
+    var hasProvenItself: Bool { lastSuccessAt != nil }
+
+    /// A short human sentence about signing health, for the UI.
+    var expiryDescription: String {
+        guard let days = daysUntilExpiry else {
+            return hasProvenItself ? "Signing status unknown" : "Not synced yet"
+        }
+        if hasExpired { return "Expired" }
+        switch days {
+        case 0: return "Expires today"
+        case 1: return "Expires tomorrow"
+        default: return "Expires in \(days) days"
+        }
+    }
+
+    /// What is still missing before this slot can run.
+    var configurationHint: String? {
+        if projectPath.isEmpty { return "Choose an .xcodeproj or .xcworkspace" }
+        if scheme.isEmpty { return "Pick a scheme" }
+        if deviceIdentifier.isEmpty { return "Pick a device" }
+        return nil
+    }
+}
+
+/// A physical device reported by `devicectl`.
+struct Device: Identifiable, Hashable, Codable {
+    var id: String { identifier }
+    var identifier: String
+    var udid: String
+    var name: String
+    var model: String
+    var osVersion: String
+    var isPaired: Bool
+    var transport: String
+
+    var subtitle: String {
+        var parts = [model]
+        if !osVersion.isEmpty { parts.append("iOS \(osVersion)") }
+        if !transport.isEmpty { parts.append(transport == "localNetwork" ? "Wi-Fi" : "USB") }
+        return parts.joined(separator: " · ")
+    }
+}
+
+enum SyncPhase: Equatable {
+    case idle
+    case preparing
+    case resettingSigning
+    case building
+    case installing
+    case launching
+    case succeeded(Date)
+    case failed(String)
+    case cancelled
+
+    var isRunning: Bool {
+        switch self {
+        case .preparing, .resettingSigning, .building, .installing, .launching: return true
+        default: return false
+        }
+    }
+
+    var isFailure: Bool {
+        if case .failed = self { return true }
+        return false
+    }
+
+    var label: String {
+        switch self {
+        case .idle: return "Idle"
+        case .preparing: return "Checking project…"
+        case .resettingSigning: return "Resetting signing…"
+        case .building: return "Building…"
+        case .installing: return "Installing…"
+        case .launching: return "Launching…"
+        case .succeeded: return "On device"
+        case .failed(let why): return why
+        case .cancelled: return "Stopped"
+        }
+    }
+}
+
+struct LogLine: Identifiable {
+    enum Kind { case info, command, output, success, failure }
+    let id = UUID()
+    let kind: Kind
+    let text: String
+}
+
+/// Who asked for a run — shown in the log and used to decide how loudly to report.
+enum RunTrigger: String, Codable {
+    case manual
+    case automatic
+}
+
+/// How a run ended. "Stopped" is deliberately not "failed": pressing Stop is
+/// the user making a decision, and holding it against the slot — a failure
+/// count, a two-hour backoff, a notification — would punish them for it.
+enum RunOutcome: Equatable {
+    case succeeded
+    case failed
+    case stopped
+}
