@@ -104,6 +104,7 @@ struct ContentView: View {
                     state.resetSigningOnly()
                     showMaintenanceLog = true
                 }
+                .disabled(state.isAnyRunning)
                 .help("Archive every provisioning profile without building anything.")
                 Button("Open Profile Backups") {
                     // Created on demand: before the first reset there is nothing

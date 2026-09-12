@@ -19,7 +19,7 @@ struct MenuBarView: View {
                 } label: {
                     Text("\(statusMark(slot)) \(slot.displayName) — \(subtitle(slot))")
                 }
-                .disabled(state.runner(for: slot.id).isRunning || state.isRefreshingAll)
+                .disabled(state.isAnyRunning)
             }
         }
 

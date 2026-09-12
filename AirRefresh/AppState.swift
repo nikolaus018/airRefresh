@@ -172,8 +172,6 @@ final class AppState {
         }
     }
 
-    var isRefreshingAll: Bool { batchTask != nil }
-
     /// Slots whose signing is inside the warning window.
     var slotsNeedingAttention: [ProjectSlot] {
         slots.filter { slot in

@@ -102,7 +102,7 @@ struct SlotCardView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .accessibilityLabel("Refresh \(slot.displayName)")
-                .disabled(!slot.isConfigured || state.isRefreshingAll)
+                .disabled(!slot.isConfigured || state.isAnyRunning)
                 .help("Reset signing, rebuild, reinstall and relaunch on \(slot.deviceName.isEmpty ? "the device" : slot.deviceName).")
                 .keyboardShortcut(shortcutKey, modifiers: [.command])
             }
