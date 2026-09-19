@@ -11,6 +11,9 @@ final class SlotRunner: Identifiable {
     private(set) var lines: [LogLine] = []
     private(set) var startedAt: Date?
     private(set) var trigger: RunTrigger = .manual
+    /// Advice for the last failure, kept apart from the log so the card can
+    /// put it next to the error instead of 4,000 lines further down.
+    private(set) var hints: [String] = []
     /// Reports how a run settled, and the bundle identifier it learned.
     var onFinished: ((RunOutcome, String) -> Void)?
     private var task: Task<Void, Never>?
@@ -268,7 +271,8 @@ final class SlotRunner: Identifiable {
     private func finishAsStopped(_ bundleID: String) {
         guard !timedOut else {
             fail("Gave up after \(Int(Self.runTimeout / 60)) minutes — the build never finished.")
-            log(.info, "💡 Try the same build in Xcode once; something is waiting for input or wedged.")
+            hints = ["Try the same build in Xcode once; something is waiting for input or wedged."]
+            log(.info, "💡 \(hints[0])")
             onFinished?(.failed, bundleID)
             return
         }
@@ -300,7 +304,8 @@ final class SlotRunner: Identifiable {
         }
         try Task.checkCancellation()
         guard exitCode == 0 else {
-            for hint in Hints.forLog(output) { log(.info, "💡 \(hint)") }
+            hints = Hints.forLog(output)
+            for hint in hints { log(.info, "💡 \(hint)") }
             throw ShellError.failed(summary: failureMessage, exitCode: exitCode)
         }
     }
@@ -386,6 +391,7 @@ final class SlotRunner: Identifiable {
         flushTask = nil
         pending.removeAll()
         lines.removeAll()
+        hints.removeAll()
         startedAt = Date()
         phase = .preparing
     }
@@ -450,9 +456,15 @@ enum Hints {
         // `devicectl`'s own wording is "The specified device was not found." —
         // the phrasing this used to look for was a guess, and the one message a
         // user is most likely to hit produced no advice at all.
+        //
+        // xcodebuild words the same situation differently again, and it is the
+        // one you meet most: the phone asleep or off Wi-Fi when the build step
+        // starts.
         if text.contains("could not find device") || text.contains("unable to find device")
-            || text.contains("device was not found") || text.contains("no device found") {
-            hints.append("The iPhone dropped off the network. Wake it, confirm the same Wi-Fi, then hit Refresh next to the device picker.")
+            || text.contains("device was not found") || text.contains("no device found")
+            || text.contains("unable to find a device matching")
+            || text.contains("unable to find a destination matching") {
+            hints.append("The iPhone dropped off the network. Wake and unlock it, confirm it is on the same Wi-Fi, then click Scan Again.")
         }
         if text.contains("application-identifier") || text.contains("mismatch") {
             hints.append("The bundle ID was signed by a different certificate before — delete the app from the iPhone and resync.")

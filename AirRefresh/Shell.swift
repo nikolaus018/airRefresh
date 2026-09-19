@@ -90,24 +90,29 @@ enum Shell {
             let buffer = LineBuffer()
             let reader = pipe.fileHandleForReading
 
+            // The stream ends only once the pipe has hit end-of-file *and* the
+            // process has exited, and only the readability handler ever reads.
+            // Finishing from the termination handler instead raced the reader:
+            // a chunk it had already pulled off the pipe was yielded after
+            // `finish()` and silently dropped — sometimes the whole output,
+            // and usually the last lines, which is where xcodebuild puts the
+            // error worth reading.
+            let done = DispatchGroup()
+            done.enter()    // end-of-file
+            done.enter()    // process exit
+
             reader.readabilityHandler = { handle in
                 let chunk = handle.availableData
-                guard !chunk.isEmpty else { return }
+                guard !chunk.isEmpty else {
+                    handle.readabilityHandler = nil
+                    if let tail = buffer.flush() { continuation.yield(.line(tail)) }
+                    done.leave()
+                    return
+                }
                 for line in buffer.take(chunk) { continuation.yield(.line(line)) }
             }
 
-            process.terminationHandler = { proc in
-                reader.readabilityHandler = nil
-                let remainder = (try? reader.readToEnd()) ?? Data()
-                if !remainder.isEmpty {
-                    for line in buffer.take(remainder) { continuation.yield(.line(line)) }
-                }
-                if let tail = buffer.flush() { continuation.yield(.line(tail)) }
-                let code = proc.terminationReason == .uncaughtSignal ? 128 + proc.terminationStatus
-                                                                    : proc.terminationStatus
-                continuation.yield(.finished(exitCode: code))
-                continuation.finish()
-            }
+            process.terminationHandler = { _ in done.leave() }
 
             continuation.onTermination = { _ in
                 guard process.isRunning else { return }
@@ -125,6 +130,14 @@ enum Shell {
             } catch {
                 reader.readabilityHandler = nil
                 continuation.finish(throwing: ShellError.launchFailed(error.localizedDescription))
+                return
+            }
+
+            done.notify(queue: .global()) {
+                let code = process.terminationReason == .uncaughtSignal ? 128 + process.terminationStatus
+                                                                        : process.terminationStatus
+                continuation.yield(.finished(exitCode: code))
+                continuation.finish()
             }
         }
     }

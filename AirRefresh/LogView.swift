@@ -37,6 +37,10 @@ struct LogView: View {
                 }
                 .padding(8)
             }
+            // Keeps the view pinned to the end as wrapped lines are measured.
+            // `scrollTo` alone lands short: rows the `LazyVStack` has not drawn
+            // yet only have estimated heights, and xcodebuild's lines wrap.
+            .defaultScrollAnchor(followsTail ? .bottom : .top)
             .background(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .fill(Color(nsColor: .textBackgroundColor))
@@ -53,7 +57,13 @@ struct LogView: View {
                 // Deliberately not animated: output arrives in batches several
                 // times a second, and animating each one queues overlapping
                 // scrolls that never settle.
-                proxy.scrollTo(bottomAnchor, anchor: .bottom)
+                scrollToTail(proxy)
+            }
+            // Opening the log after a run should show how it ended, not how it
+            // began. This touches no state, so it cannot start the layout loop
+            // described above.
+            .onAppear {
+                if followsTail { scrollToTail(proxy) }
             }
         }
         .accessibilityLabel("Build log")
@@ -62,7 +72,7 @@ struct LogView: View {
     private func followButton(_ proxy: ScrollViewProxy) -> some View {
         Button {
             followsTail.toggle()
-            if followsTail { proxy.scrollTo(bottomAnchor, anchor: .bottom) }
+            if followsTail { scrollToTail(proxy) }
         } label: {
             Image(systemName: followsTail ? "arrow.down.to.line.circle.fill"
                                           : "arrow.down.to.line.circle")
@@ -79,6 +89,10 @@ struct LogView: View {
     }
 
     private let bottomAnchor = "log-bottom"
+
+    private func scrollToTail(_ proxy: ScrollViewProxy) {
+        proxy.scrollTo(bottomAnchor, anchor: .bottom)
+    }
 
     private func color(for kind: LogLine.Kind) -> Color {
         switch kind {

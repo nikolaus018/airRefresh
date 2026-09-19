@@ -89,15 +89,38 @@ struct ProjectSlot: Identifiable, Codable, Hashable {
     var hasProvenItself: Bool { lastSuccessAt != nil }
 
     /// A short human sentence about signing health, for the UI.
-    var expiryDescription: String {
-        guard let days = daysUntilExpiry else {
+    var expiryDescription: String { expiryDescription(now: Date()) }
+
+    /// Counts calendar days, not 24-hour periods, because that is what
+    /// "tomorrow" means to a person. `daysUntilExpiry` counts whole periods —
+    /// right for the scheduler's threshold, wrong for a sentence: on a Saturday
+    /// afternoon, a profile dying Monday morning is 1.8 periods away and used
+    /// to be described as expiring "tomorrow".
+    func expiryDescription(now: Date, calendar: Calendar = .current) -> String {
+        guard let expiry = profileExpiresAt else {
             return hasProvenItself ? "Signing status unknown" : "Not synced yet"
         }
-        if hasExpired { return "Expired" }
+        if expiry <= now { return "Expired" }
+        let days = calendarDaysUntilExpiry(now: now, calendar: calendar) ?? 0
         switch days {
-        case 0: return "Expires today"
+        case ...0: return "Expires today"
         case 1: return "Expires tomorrow"
         default: return "Expires in \(days) days"
+        }
+    }
+
+    /// Midnights between now and expiry: 0 is today, 1 is tomorrow.
+    func calendarDaysUntilExpiry(now: Date = Date(), calendar: Calendar = .current) -> Int? {
+        guard let expiry = profileExpiresAt else { return nil }
+        return calendar.dateComponents([.day],
+                                       from: calendar.startOfDay(for: now),
+                                       to: calendar.startOfDay(for: expiry)).day
+    }
+
+    /// The exact moment, for a tooltip under the rounded sentence.
+    var expiryDetail: String? {
+        profileExpiresAt.map {
+            ($0 <= Date() ? "Expired " : "Expires ") + $0.formatted(date: .complete, time: .shortened)
         }
     }
 

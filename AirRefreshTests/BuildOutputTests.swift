@@ -122,6 +122,16 @@ struct HintTests {
         #expect(hints.contains { $0.contains("dropped off the network") })
     }
 
+    /// Also verbatim: what `xcodebuild` says when the phone is asleep or off
+    /// the network as the build starts — the failure people hit most.
+    @Test func xcodebuildsUnreachableDestinationIsRecognised() {
+        let hints = Hints.forLog([
+            "xcodebuild: error: Unable to find a device matching the provided destination specifier:",
+            "\t\t{ id:00008120-000A1B2C3D4E5F60 }"
+        ])
+        #expect(hints.contains { $0.contains("dropped off the network") })
+    }
+
     @Test func aCleanBuildProducesNoAdvice() {
         #expect(Hints.forLog(["** BUILD SUCCEEDED **", "Touching Notes.app"]).isEmpty)
     }

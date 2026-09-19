@@ -11,6 +11,7 @@ struct SlotCardView: View {
     @State private var showLog = false
     @State private var showAdvanced = false
     @State private var isRenaming = false
+    @State private var isDropTargeted = false
     @FocusState private var renameFocused: Bool
 
     private var slot: ProjectSlot { state.slots.first { $0.id == slotID } ?? ProjectSlot() }
@@ -37,21 +38,28 @@ struct SlotCardView: View {
         VStack(alignment: .leading, spacing: 14) {
             titleRow
             Divider()
-            pathRow
-            settingsRow
-            automationRow
-            if let problem = state.schemeError(for: slot) {
-                Label(problem, systemImage: "exclamationmark.triangle.fill")
-                    .font(.callout)
-                    .foregroundStyle(.orange)
-                    .textSelection(.enabled)
-            } else if let hint = slot.configurationHint {
-                Label(hint, systemImage: "info.circle")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
+            if slot.projectPath.isEmpty {
+                emptyState
+            } else {
+                if case .failed(let message) = runner.phase {
+                    failureBanner(message)
+                }
+                pathRow
+                settingsRow
+                automationRow
+                if let problem = state.schemeError(for: slot) {
+                    Label(problem, systemImage: "exclamationmark.triangle.fill")
+                        .font(.callout)
+                        .foregroundStyle(.orange)
+                        .textSelection(.enabled)
+                } else if let hint = slot.configurationHint {
+                    Label(hint, systemImage: "info.circle")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+                advancedSection
+                logSection
             }
-            advancedSection
-            logSection
         }
         .padding(16)
         .background(
@@ -91,7 +99,9 @@ struct SlotCardView: View {
                 }
                 .accessibilityLabel("Stop refreshing \(slot.displayName)")
                 .help("Stop this refresh. Nothing already installed on the iPhone is undone.")
-            } else {
+            } else if !slot.projectPath.isEmpty {
+                // An empty slot has nothing to refresh; its one action is the
+                // Choose Project button in the drop zone below.
                 // One button: reset signing, rebuild, reinstall, relaunch.
                 Button {
                     showLog = true
@@ -143,17 +153,23 @@ struct SlotCardView: View {
                     .onSubmit { endRenaming() }
                     .onExitCommand { endRenaming() }
                     .onChange(of: renameFocused) { if !renameFocused { isRenaming = false } }
+                    .frame(width: 220)
             } else {
+                // Capped, but only as wide as the name itself. A plain
+                // `maxWidth` frame always took the full 220pt, which left
+                // short names like "Budget" with their pills floating off to
+                // the right.
                 Text(slot.displayName)
                     .lineLimit(1)
                     .truncationMode(.tail)
+                    .frame(maxWidth: 220, alignment: .leading)
+                    .fixedSize(horizontal: true, vertical: false)
                     .contentShape(Rectangle())
                     .onTapGesture(count: 2) { beginRenaming() }
                     .help("Double-click to rename. Leave it empty to use the project file's own name.")
             }
         }
         .font(.system(size: 15, weight: .semibold))
-        .frame(maxWidth: 220, alignment: .leading)
         .accessibilityLabel("Project name")
     }
 
@@ -187,14 +203,91 @@ struct SlotCardView: View {
                 .truncationMode(.head)
                 .textSelection(.enabled)
             Spacer()
-            Button("Choose…") {
+            Button("Change…") {
                 guard let path = ProjectPicker.choose() else { return }
                 Task { await state.setProjectPath(path, for: slot) }
             }
             .disabled(runner.isRunning)
-            .accessibilityLabel("Choose an Xcode project")
-            .help("Pick the .xcodeproj or .xcworkspace to keep signed.")
+            .accessibilityLabel("Choose a different Xcode project")
+            .help("Pick a different .xcodeproj or .xcworkspace for this slot.")
         }
+    }
+
+    /// What an empty slot is for: getting a project into it. Everything else
+    /// on a card — scheme, device, automation, a disabled Refresh — is noise
+    /// until there is a project to apply it to.
+    private var emptyState: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "hammer.circle")
+                .font(.system(size: 30, weight: .light))
+                .foregroundStyle(isDropTargeted ? Color.accentColor : Color.secondary)
+                .accessibilityHidden(true)
+            Text("Drop an Xcode project here")
+                .font(.headline)
+            Text("An .xcodeproj or .xcworkspace, or the folder that holds one.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            Button("Choose Project…") {
+                guard let path = ProjectPicker.choose() else { return }
+                Task { await state.setProjectPath(path, for: slot) }
+            }
+            .buttonStyle(.borderedProminent)
+            .padding(.top, 4)
+        }
+        .multilineTextAlignment(.center)
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 22)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(isDropTargeted ? Color.accentColor.opacity(0.08) : Color.clear)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(isDropTargeted ? Color.accentColor : Color(nsColor: .separatorColor),
+                              style: StrokeStyle(lineWidth: isDropTargeted ? 2 : 1, dash: [6, 4]))
+        )
+        .dropDestination(for: URL.self) { urls, _ in
+            guard let url = urls.first, let path = ProjectPicker.resolve(url) else { return false }
+            Task { await state.setProjectPath(path, for: slot) }
+            return true
+        } isTargeted: { isDropTargeted = $0 }
+    }
+
+    /// The reason a run failed, and what to do about it, where you are already
+    /// looking. The status pill only had room for "Failed"; the rest was in a
+    /// tooltip and at the bottom of a collapsed log.
+    private func failureBanner(_ message: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Image(systemName: "xmark.octagon.fill")
+                .foregroundStyle(.red)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(message)
+                    .font(.callout.weight(.semibold))
+                ForEach(runner.hints, id: \.self) { hint in
+                    Text(hint)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .textSelection(.enabled)
+            Spacer(minLength: 8)
+            if !showLog {
+                Button("Show Log") { showLog = true }
+                    .buttonStyle(.link)
+            }
+        }
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Color.red.opacity(0.08))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(Color.red.opacity(0.3))
+        )
+        .accessibilityElement(children: .combine)
     }
 
     private var settingsRow: some View {
@@ -204,8 +297,13 @@ struct SlotCardView: View {
                     Picker("", selection: field(\.scheme, default: "")) {
                         // Only stand in for the current value when the real list
                         // does not contain it — duplicate tags confuse Picker.
+                        // And only call it missing once the list has actually
+                        // been read: on launch every card briefly claimed its
+                        // perfectly good scheme was "not in project".
                         if !state.schemes(for: slot).contains(slot.scheme) {
-                            Text(slot.scheme.isEmpty ? "—" : "\(slot.scheme) (not in project)")
+                            Text(slot.scheme.isEmpty ? "—"
+                                 : state.hasLoadedSchemes(slot) ? "\(slot.scheme) (not in project)"
+                                 : slot.scheme)
                                 .tag(slot.scheme)
                         }
                         ForEach(state.schemes(for: slot), id: \.self) { name in
@@ -361,6 +459,7 @@ struct ExpiryPill: View {
             .padding(.vertical, 3)
             .background(Capsule().fill(color.opacity(0.15)))
             .foregroundStyle(color)
+            .help(slot.expiryDetail ?? "No provisioning profile for this app has been found yet.")
             .accessibilityLabel("Signing: \(slot.expiryDescription)")
     }
 

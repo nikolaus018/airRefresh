@@ -6,15 +6,19 @@ struct SettingsView: View {
     private var preferences: Preferences { state.preferences }
 
     var body: some View {
+        // Each tab carries its own height, and the window resizes as you switch
+        // between them, the way a Mac settings window does. One shared minimum
+        // height did not work: a settings window cannot be resized by hand, so
+        // anything past the minimum — the "Right now" list — was clipped.
         TabView {
-            general.tabItem { Label("General", systemImage: "gearshape") }
-            automatic.tabItem { Label("Automatic", systemImage: "clock.arrow.2.circlepath") }
+            general
+                .frame(height: 380)
+                .tabItem { Label("General", systemImage: "gearshape") }
+            automatic
+                .frame(height: 560)
+                .tabItem { Label("Automatic", systemImage: "clock.arrow.2.circlepath") }
         }
-        // Width is fixed the way a settings window's is; height is a floor, not
-        // a ceiling, so the "Right now" list can grow to three projects without
-        // the last one being clipped off the bottom.
         .frame(width: 540)
-        .frame(minHeight: 420)
         .task {
             preferences.refreshLoginItemStatus()
             preferences.refreshNotificationAuthorization()
@@ -99,13 +103,8 @@ struct SettingsView: View {
                 Toggle("Refresh projects automatically", isOn: bind(\.automaticRefreshEnabled))
 
                 Stepper(value: bind(\.refreshWhenDaysRemaining), in: 1...6) {
-                    HStack {
-                        Text("Refresh when signing has")
-                        Text("\(preferences.refreshWhenDaysRemaining) day\(preferences.refreshWhenDaysRemaining == 1 ? "" : "s")")
-                            .monospacedDigit()
-                            .fontWeight(.medium)
-                        Text("left")
-                    }
+                    let days = preferences.refreshWhenDaysRemaining
+                    Text("Refresh when signing has \(Text("\(days) day\(days == 1 ? "" : "s")").fontWeight(.medium).monospacedDigit()) left")
                 }
                 .disabled(!preferences.automaticRefreshEnabled)
 
@@ -113,12 +112,7 @@ struct SettingsView: View {
                     .disabled(!preferences.automaticRefreshEnabled)
 
                 Stepper(value: bind(\.idleMinutes), in: 1...60) {
-                    HStack {
-                        Text("Idle for at least")
-                        Text("\(preferences.idleMinutes) min")
-                            .monospacedDigit()
-                            .fontWeight(.medium)
-                    }
+                    Text("Idle for at least \(Text("\(preferences.idleMinutes) min").fontWeight(.medium).monospacedDigit())")
                 }
                 .disabled(!preferences.automaticRefreshEnabled || !preferences.onlyWhenIdle)
             } header: {

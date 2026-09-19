@@ -2,7 +2,6 @@ import SwiftUI
 
 struct ContentView: View {
     @Bindable var state: AppState
-    @State private var showMaintenanceLog = false
     @Environment(\.openSettings) private var openSettings
 
     var body: some View {
@@ -24,8 +23,8 @@ struct ContentView: View {
             }
             state.scheduler.evaluateNow()
         }
-        .sheet(isPresented: $showMaintenanceLog) {
-            MaintenanceSheet(runner: state.maintenance) { showMaintenanceLog = false }
+        .sheet(isPresented: $state.isShowingSigningResetLog) {
+            MaintenanceSheet(runner: state.maintenance) { state.isShowingSigningResetLog = false }
         }
     }
 
@@ -101,8 +100,8 @@ struct ContentView: View {
                                      set: { state.preferences.automaticRefreshEnabled = $0 }))
                 Divider()
                 Button("Reset Signing Only…") {
+                    guard SigningResetPrompt.confirm() else { return }
                     state.resetSigningOnly()
-                    showMaintenanceLog = true
                 }
                 .disabled(state.isAnyRunning)
                 .help("Archive every provisioning profile without building anything.")
@@ -182,17 +181,26 @@ struct ContentView: View {
                         .id(slot.id)
                 }
 
-                if state.canAddSlot {
+                // An empty card already says "drop a project here"; a second
+                // button offering the same thing just below it is one too many.
+                if state.slots.contains(where: { $0.projectPath.isEmpty }) {
+                    EmptyView()
+                } else if state.canAddSlot {
                     Button {
-                        state.addSlot()
+                        Task { await state.chooseAndAddProject() }
                     } label: {
-                        Label("Add Project (\(state.slots.count) of \(AppState.maxSlots))",
+                        Label("Add Project… (\(state.slots.count) of \(AppState.maxSlots))",
                               systemImage: "plus.circle.fill")
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 12)
                     }
                     .buttonStyle(.bordered)
                     .accessibilityLabel("Add a project")
+                    .dropDestination(for: URL.self) { urls, _ in
+                        guard let url = urls.first, let path = ProjectPicker.resolve(url) else { return false }
+                        Task { await state.addProject(at: path) }
+                        return true
+                    }
                 } else {
                     Text("Three is the maximum: a free Apple ID can only sign three apps at a time. Remove one to add another.")
                         .font(.callout)

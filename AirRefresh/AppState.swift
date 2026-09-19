@@ -54,15 +54,34 @@ final class AppState {
 
     var canAddSlot: Bool { slots.count < Self.maxSlots }
 
-    func addSlot() {
-        guard canAddSlot else { return }
-        slots.append(ProjectSlot())
+    /// Somewhere a newly picked project can go: an empty slot, or room for one.
+    var canAddProject: Bool { canAddSlot || slots.contains { $0.projectPath.isEmpty } }
+
+    /// Picks a project and puts it in the first empty slot, or a new one.
+    ///
+    /// "Add Project" used to append a blank card and leave you to find its
+    /// Choose… button. The picker is the only thing anyone does next, so it
+    /// opens straight away, and cancelling it leaves nothing behind.
+    func chooseAndAddProject() async {
+        guard canAddProject, let path = ProjectPicker.choose() else { return }
+        await addProject(at: path)
+    }
+
+    func addProject(at path: String) async {
+        if let empty = slots.first(where: { $0.projectPath.isEmpty }) {
+            await setProjectPath(path, for: empty)
+        } else if canAddSlot {
+            let slot = ProjectSlot()
+            slots.append(slot)
+            await setProjectPath(path, for: slot)
+        }
     }
 
     func removeSlot(_ slot: ProjectSlot) {
         runner(for: slot.id).stop()
         runners[slot.id] = nil
         schemes[slot.id] = nil
+        schemeErrors[slot.id] = nil
         slots.removeAll { $0.id == slot.id }
         if slots.isEmpty { slots = [ProjectSlot()] }
     }
@@ -150,8 +169,19 @@ final class AppState {
 
     // MARK: - Actions
 
+    /// Starts a refresh, unless anything else is already running.
+    ///
+    /// The one-at-a-time rule lives here rather than in the buttons. It used to
+    /// be a `.disabled` on each control, and a control that forgot — the ⌘R
+    /// and ⇧⌘R menu commands both did — could still start a second run over
+    /// the same provisioning-profile folders.
     @discardableResult
     func resync(_ slot: ProjectSlot, trigger: RunTrigger = .manual) -> Task<Void, Never>? {
+        guard !isAnyRunning else { return nil }
+        return startRun(slot, trigger: trigger)
+    }
+
+    private func startRun(_ slot: ProjectSlot, trigger: RunTrigger) -> Task<Void, Never>? {
         if trigger == .manual { scheduler.clearBackoff(slot.id) }
         return runner(for: slot.id).resync(slot: slot, trigger: trigger)
     }
@@ -160,13 +190,12 @@ final class AppState {
     /// other through the same provisioning-profile folder is exactly how you
     /// get signing failures that do not reproduce.
     func resyncAll(trigger: RunTrigger = .manual) {
-        guard batchTask == nil else { return }
+        guard !isAnyRunning else { return }
         batchTask = Task { [weak self] in
             guard let self else { return }
             for slot in self.readySlots {
                 if Task.isCancelled { break }
-                guard !self.runner(for: slot.id).isRunning else { continue }
-                await self.resync(slot, trigger: trigger)?.value
+                await self.startRun(slot, trigger: trigger)?.value
             }
             self.batchTask = nil
         }
@@ -201,16 +230,30 @@ final class AppState {
     }
 
     /// One line for the menu bar tooltip and header.
+    ///
+    /// Names the project whenever there is something to do. "Signing expires
+    /// tomorrow" left you reading every card to find out whose.
     var healthSummary: String {
         let ready = readySlots
         guard !ready.isEmpty else { return "No projects set up yet" }
-        if ready.contains(where: \.hasExpired) { return "Signing has expired" }
-        let soonest = ready.compactMap(\.daysUntilExpiry).min()
-        guard let days = soonest else { return "\(ready.count) project\(ready.count == 1 ? "" : "s") ready" }
+
+        let expired = ready.filter(\.hasExpired)
+        if expired.count == 1 { return "\(expired[0].displayName) has expired" }
+        if expired.count > 1 { return "\(expired.count) projects have expired" }
+
+        guard let soonest = ready
+                .filter({ $0.profileExpiresAt != nil })
+                .min(by: { $0.profileExpiresAt! < $1.profileExpiresAt! }),
+              let days = soonest.calendarDaysUntilExpiry()
+        else { return "\(ready.count) project\(ready.count == 1 ? "" : "s") ready" }
+
+        let needsAttention = slotsNeedingAttention.contains { $0.id == soonest.id }
         switch days {
-        case 0: return "Signing expires today"
-        case 1: return "Signing expires tomorrow"
-        default: return "Signing good for \(days) more days"
+        case ...0: return "\(soonest.displayName) expires today"
+        case 1: return "\(soonest.displayName) expires tomorrow"
+        default:
+            return needsAttention ? "\(soonest.displayName) expires in \(days) days"
+                                  : "Signing good for \(days) more days"
         }
     }
 
@@ -242,8 +285,16 @@ final class AppState {
         maintenance.stop()
     }
 
+    /// Whether the log sheet for "Reset Signing Only" is up. Lives here, not in
+    /// the window, so the menu command can open it as well as the ⋯ menu —
+    /// before, ⇧⌘R archived every profile on the Mac with nothing on screen.
+    var isShowingSigningResetLog = false
+
+    /// The hammer. Callers confirm with the user first; see `SigningResetPrompt`.
     func resetSigningOnly() {
+        guard !isAnyRunning else { return }
         maintenance.resetSigningOnly()
+        isShowingSigningResetLog = true
     }
 
     // MARK: - Schemes
@@ -283,6 +334,9 @@ final class AppState {
     }
 
     func schemes(for slot: ProjectSlot) -> [String] { schemes[slot.id] ?? [] }
+    /// Whether the scheme list has been read at all — until it has, a saved
+    /// scheme missing from it proves nothing.
+    func hasLoadedSchemes(_ slot: ProjectSlot) -> Bool { schemes[slot.id] != nil }
     func isLoadingSchemes(_ slot: ProjectSlot) -> Bool { loadingSchemes.contains(slot.id) }
     func schemeError(for slot: ProjectSlot) -> String? { schemeErrors[slot.id] }
 

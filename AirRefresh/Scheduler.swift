@@ -303,13 +303,19 @@ final class Scheduler {
     }
 
     nonisolated static func explanation(for verdict: Verdict, deviceName: String, rules: Rules) -> String {
-        let days = rules.threshold
+        /// "in about 3 days" rather than "at 2 days left (5 now)": the question
+        /// being answered is when, not the arithmetic behind it.
+        func inAbout(_ days: Int) -> String {
+            days <= 1 ? "in about a day" : "in about \(days) days"
+        }
         switch verdict {
         case .notConfigured:      return "Finish setting this slot up"
         case .automaticDisabled:  return "Automatic refresh is off"
         case .neverRunManually:   return "Run it once yourself, then it keeps itself alive"
-        case .healthy(let left):  return "Healthy · refreshes at \(days) day\(days == 1 ? "" : "s") left (\(left) now)"
-        case .signingUnknown(let age): return "No matching profile found · will rebuild \(max(0, rules.assumedProfileLifetimeDays - days - age)) day(s) from now"
+        case .healthy(let left):  return "Healthy · refreshes itself \(inAbout(left - rules.threshold))"
+        case .signingUnknown(let age):
+            let wait = rules.assumedProfileLifetimeDays - rules.threshold - age
+            return "No matching profile found · rebuilds \(inAbout(wait))"
         case .waitingForDevice:   return "Waiting for \(deviceName.isEmpty ? "the device" : deviceName) to come back"
         case .waitingForIdle:     return "Due — waiting for the Mac to be idle"
         case .backingOff(let until): return "Retrying after \(until.formatted(date: .omitted, time: .shortened))"

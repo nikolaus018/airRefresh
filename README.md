@@ -95,7 +95,7 @@ does *not* keep the Mac awake — a missed refresh is a much better trade than a
 laptop that never sleeps.
 
 **Settings ▸ Automatic** shows, per project, exactly what the scheduler is
-currently thinking — "Healthy · refreshes automatically at 2 days left (5 now)",
+currently thinking — "Healthy · refreshes itself in about 3 days",
 "Due — waiting for the Mac to be idle", and so on. The rules are a pure function
 with a [test suite](AirRefreshTests/SchedulerRulesTests.swift) pinning every
 branch of it down.
@@ -136,8 +136,12 @@ System Settings ▸ Privacy & Security if you keep projects in many places.
 
 ## Using it
 
-- **Choose…** picks an `.xcodeproj` or `.xcworkspace` — picking the enclosing
-  folder works too. Schemes are read from the project with `xcodebuild -list`.
+- **Add Project…** (`⌘N`) opens the picker straight away. Pick an `.xcodeproj`
+  or `.xcworkspace`, or the folder that holds one. You can also drag one from
+  Finder onto an empty slot. **Change…** swaps the project on a slot you have
+  already set up. Schemes are read from the project with `xcodebuild -list`.
+- When a refresh fails, the card says why in a banner, with a 💡 hint when
+  AirRefresh recognises the cause. The full log is one click away.
 - Double-click a project's name to rename it (or `⋯ ▸ Rename`). Leave it empty
   and it falls back to the project file's own name.
 - The **iPhone** dropdown lists every paired physical device from
@@ -152,7 +156,7 @@ three apps at a time.
 
 ### Menu bar and login
 
-The menu bar icon shows overall health and offers per-project refresh, an
+The menu bar icon shows overall health and offers a submenu per project (*Refresh Now*, *Show in AirRefresh*), an
 automatic-refresh toggle, and Quit without opening the window. **Closing the
 window does not quit the app** — quit from the menu bar icon.
 
@@ -170,7 +174,7 @@ In **Settings ▸ General**:
 |---|---|
 | `⌘1` `⌘2` `⌘3` | Refresh project 1 / 2 / 3 |
 | `⌘R` | Refresh all |
-| `⇧⌘R` | Reset signing only |
+| `⇧⌘R` | Reset signing only (asks first) |
 | `⌘N` | Add a project |
 | `⌘.` | Stop everything |
 | `⌘,` | Settings |
@@ -191,7 +195,7 @@ The log prints a 💡 hint when it recognises the cause. The usual ones:
 |---|---|
 | "maximum number of apps for free development profiles" | A free Apple ID allows 3 apps at a time. Delete an old dev build from the phone. |
 | **Untrusted developer** on the phone | Settings ▸ General ▸ VPN & Device Management, then trust your certificate. |
-| Device not found | Wake the phone, check it is on the same Wi-Fi, hit *Refresh* next to the device picker. |
+| Device not found / "Unable to find a device matching" | Wake and unlock the phone, check it is on the same Wi-Fi, click *Scan Again* in the header. |
 | `application-identifier` mismatch | The bundle ID was signed by a different certificate before. Delete the app from the phone and refresh again. |
 | "requires a development team" | Open the project in Xcode once and pick your team under Signing & Capabilities. |
 | "scheme is not currently configured" | The scheme is not shared. Xcode ▸ Product ▸ Scheme ▸ Manage Schemes ▸ tick *Shared*. |
@@ -204,7 +208,7 @@ xcodebuild test -project AirRefresh.xcodeproj -scheme AirRefresh -destination 'p
 swift Tools/GenerateAppIcon.swift   # redraws the app icon
 ```
 
-94 tests, no network and no device required. They cover the signing-reset rules
+96 tests, no network and no device required. They cover the signing-reset rules
 and the archiving itself, `Shell`'s streaming and cancellation against real
 processes, the scheduler's whole decision table, `devicectl` parsing, profile
 expiry lookup, and the slot migration path.

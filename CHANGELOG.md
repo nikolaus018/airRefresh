@@ -2,7 +2,61 @@
 
 ## Unreleased
 
+### Changed
+
+- **Empty slots are a drop zone.** Drag an `.xcodeproj`/`.xcworkspace` (or its
+  folder) from Finder onto the slot, or use *Choose Project…*. An empty slot no
+  longer shows a disabled Refresh, an empty scheme picker and automation
+  switches for a project that does not exist yet. *Add Project…* and `⌘N` open
+  the picker right away, and cancelling it leaves no blank card behind.
+- **A failed refresh says why on the card.** The status pill had room only for
+  "Failed". The reason and the 💡 hint were in a tooltip and at the bottom of a
+  collapsed log. They now sit in a banner under the title.
+- **The header names the project**: "Budget expires tomorrow", not "Signing
+  expires tomorrow". The expiry pill's tooltip gives the exact date and time.
+- **Menu bar projects are submenus** with *Refresh Now* and *Show in
+  AirRefresh*, and use the same SF Symbols as the window. As plain buttons they
+  read like status lines, and clicking one to look closer rebuilt and
+  reinstalled the app.
+- The scheduler says "Healthy · refreshes itself in about 3 days" rather than
+  "refreshes at 2 days left (5 now)".
+
 ### Fixed
+
+- **Output from a finished command could be dropped, sometimes all of it.**
+  `Shell.stream` finished from the process's termination handler while the
+  pipe's readability handler, on another thread, could still be holding a
+  chunk. That chunk was yielded after `finish()` and lost. The usual victim
+  was the last lines of an `xcodebuild` run, which is where the error is.
+  Sometimes it was the whole output of `xcodebuild -list`, and the slot then
+  claimed it "could not read the schemes". The stream now ends only after both
+  end-of-file and process exit. `ShellTests` had caught it all along, about one
+  run in five.
+- **⌘R and ⇧⌘R could start a run on top of another.** The one-at-a-time rule
+  was a `.disabled` on each button, and the two menu commands never got one.
+  `AppState` now enforces it itself.
+- **⇧⌘R archived every profile on the Mac with no confirmation and nothing on
+  screen.** The log sheet opened only from the ⋯ menu. Both paths now ask first,
+  saying how many profiles are involved, and then show the log.
+- **An iPhone that is asleep at build time got no hint.** `xcodebuild` says
+  "Unable to find a device matching the provided destination specifier". The
+  hint matched "unable to find device". That hint also told you to click a
+  Refresh button next to the device picker that does not exist. The button is
+  *Scan Again*, in the header.
+- **Every card claimed its scheme was "(not in project)" at launch** until
+  `xcodebuild -list` came back.
+- **"Tomorrow" meant "within 48 hours".** Days were whole 24-hour periods, so
+  on a Saturday afternoon a profile dying Monday morning "expired tomorrow".
+  The wording now counts calendar days. The scheduler's threshold still uses
+  hours.
+- **The log did not end on the last line.** Following the tail undershot once
+  `xcodebuild`'s long lines wrapped, and opening the log after a run started it
+  at the top.
+- **The Automatic settings tab was clipped.** A settings window cannot be
+  resized, so its "minimum" height was the height, and the *Right now* list ran
+  off the bottom. Each tab now sets its own height.
+- Short project names no longer leave their status pills floating 200pt to the
+  right.
 
 - **A build could look like it had hung at its eighth line.** The log inferred
   "is the user still at the bottom?" from `onAppear`/`onDisappear` on its scroll
