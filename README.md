@@ -357,7 +357,7 @@ Bug reports and pull requests are welcome. Please:
 
 - run the tests before opening a PR, and add one for any behaviour you change,
 - keep the build warning-free under strict concurrency,
-- add a line to [`CHANGELOG.md`](CHANGELOG.md) under *Unreleased*.
+- add a line to [`CHANGELOG.md`](CHANGELOG.md) under an *Unreleased* heading.
 
 ## License
 
