@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 /// A provisioning profile as it sits on disk.
 ///
@@ -13,6 +14,12 @@ struct ProvisioningProfile: Identifiable, Hashable {
     var applicationIdentifier: String
     var creationDate: Date
     var expirationDate: Date
+    /// `TeamIdentifier`, e.g. `ABCDE12345`.
+    var teamIdentifier: String = ""
+    /// SHA-1 of each certificate the profile allows to sign, upper-case hex —
+    /// the same form `security find-identity` prints.
+    var certificateFingerprints: [String] = []
+    var getTaskAllow: Bool = false
 
     /// `C5MSK2XBMK.win.ringtwo.EarRouter` → `win.ringtwo.EarRouter`
     var bundleIdentifier: String {
@@ -53,8 +60,8 @@ enum ProfileInspector {
             .sorted { $0.expirationDate < $1.expirationDate }
     }
 
-    /// The profile that expires soonest among those covering `bundleID`.
-    /// An exact match always beats a wildcard.
+    /// The profile governing `bundleID`: an exact match always beats a
+    /// wildcard, and among equals the one that lives longest wins.
     static func profile(covering bundleID: String) -> ProvisioningProfile? {
         best(covering: bundleID, among: installedProfiles())
     }
@@ -74,10 +81,17 @@ enum ProfileInspector {
         }
     }
 
+    ///
+    /// Longest, not soonest: a fresh build is signed with the newest profile
+    /// Xcode has, so that is what the phone is running. Reading the oldest
+    /// instead — which happens whenever "Reset signing" is off and last week's
+    /// profile is still on disk — made a slot that had just been refreshed look
+    /// due again, and the scheduler rebuilt it every two hours.
     static func best(covering bundleID: String,
                      among profiles: [ProvisioningProfile]) -> ProvisioningProfile? {
         let matches = profiles.filter { $0.covers(bundleID: bundleID) }
-        return matches.first { !$0.isWildcard } ?? matches.first
+        let exact = matches.filter { !$0.isWildcard }
+        return (exact.isEmpty ? matches : exact).max { $0.expirationDate < $1.expirationDate }
     }
 
     static func parse(_ url: URL) -> ProvisioningProfile? {
@@ -89,6 +103,10 @@ enum ProfileInspector {
         else { return nil }
 
         let entitlements = plist["Entitlements"] as? [String: Any] ?? [:]
+        let team = (plist["TeamIdentifier"] as? [String])?.first
+            ?? entitlements["com.apple.developer.team-identifier"] as? String
+            ?? ""
+        let fingerprints = (plist["DeveloperCertificates"] as? [Data] ?? []).map(fingerprint)
         return ProvisioningProfile(
             url: url,
             uuid: uuid,
@@ -96,8 +114,16 @@ enum ProfileInspector {
             teamName: plist["TeamName"] as? String ?? "",
             applicationIdentifier: entitlements["application-identifier"] as? String ?? "",
             creationDate: plist["CreationDate"] as? Date ?? .distantPast,
-            expirationDate: expiration
+            expirationDate: expiration,
+            teamIdentifier: team,
+            certificateFingerprints: fingerprints,
+            getTaskAllow: entitlements["get-task-allow"] as? Bool ?? false
         )
+    }
+
+    /// SHA-1 of a DER certificate, as `security find-identity` prints it.
+    static func fingerprint(_ certificate: Data) -> String {
+        Insecure.SHA1.hash(data: certificate).map { String(format: "%02X", $0) }.joined()
     }
 
     /// Carves the XML plist out of the CMS wrapper.

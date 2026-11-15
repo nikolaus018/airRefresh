@@ -165,15 +165,15 @@ enum SigningResetPrompt {
     }
 }
 
-/// Opens the standard panel for picking a project, with a little leniency:
-/// selecting the enclosing folder works too.
+/// Opens the standard panel for picking a project or an `.ipa`, with a little
+/// leniency: selecting the enclosing folder works too.
 @MainActor
 enum ProjectPicker {
     static func choose() -> String? {
         let panel = NSOpenPanel()
-        panel.title = "Choose an Xcode Project"
-        panel.message = "Select an .xcodeproj or .xcworkspace (or the folder containing one)."
-        panel.prompt = "Use Project"
+        panel.title = "Choose an Xcode Project or .ipa"
+        panel.message = "Select an .xcodeproj, .xcworkspace or .ipa (or the folder containing one)."
+        panel.prompt = "Use This"
         panel.canChooseFiles = true
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
@@ -188,7 +188,7 @@ enum ProjectPicker {
     /// gets an explanation rather than a beep.
     static func resolve(_ url: URL) -> String? {
         let ext = url.pathExtension.lowercased()
-        if ext == "xcodeproj" || ext == "xcworkspace" { return url.path }
+        if ext == "xcodeproj" || ext == "xcworkspace" || ext == "ipa" { return url.path }
 
         // A plain folder was picked — look inside for the obvious candidate.
         let contents = (try? FileManager.default.contentsOfDirectory(at: url, includingPropertiesForKeys: nil)) ?? []
@@ -198,17 +198,20 @@ enum ProjectPicker {
         if let project = contents.first(where: { $0.pathExtension.lowercased() == "xcodeproj" }) {
             return project.path
         }
+        // Source beats a build: only fall back to an .ipa when there is no project.
+        let ipas = contents.filter { $0.pathExtension.lowercased() == "ipa" }
+        if ipas.count == 1 { return ipas[0].path }
 
         // A beep is not an explanation.
         let isFolder = (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = isFolder
-            ? "No Xcode project in “\(url.lastPathComponent)”"
-            : "“\(url.lastPathComponent)” is not an Xcode project"
-        alert.informativeText = (isFolder ? "That folder holds no .xcodeproj or .xcworkspace. "
-                                          : "AirRefresh needs an .xcodeproj or .xcworkspace. ")
-                              + "Choose the project file itself, or the folder that contains it."
+            ? "No Xcode project or .ipa in “\(url.lastPathComponent)”"
+            : "“\(url.lastPathComponent)” is not an Xcode project or .ipa"
+        alert.informativeText = (isFolder ? "That folder holds no .xcodeproj, .xcworkspace or single .ipa. "
+                                          : "AirRefresh needs an .xcodeproj, .xcworkspace or .ipa. ")
+                              + "Choose the file itself, or the folder that contains it."
         alert.addButton(withTitle: "OK")
         alert.runModal()
         return nil

@@ -120,7 +120,16 @@ enum SigningReset {
             }
 
             let bucket = destinationRoot.appending(path: directory.lastPathComponent)
-            try fm.createDirectory(at: bucket, withIntermediateDirectories: true)
+            do {
+                try fm.createDirectory(at: bucket, withIntermediateDirectories: true)
+            } catch {
+                // The second folder failing must not strand what was already
+                // moved out of the first.
+                log("✗ \(error.localizedDescription)")
+                log("· rolling back \(journal.count) profile(s) already moved")
+                rollBack(journal, log: log)
+                throw error
+            }
 
             for profile in doomed {
                 let destination = uniqueDestination(for: profile, in: bucket)

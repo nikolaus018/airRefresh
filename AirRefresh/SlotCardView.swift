@@ -47,7 +47,12 @@ struct SlotCardView: View {
                 pathRow
                 settingsRow
                 automationRow
-                if let problem = state.schemeError(for: slot) {
+                if let problem = ipaProblem {
+                    Label(problem, systemImage: "exclamationmark.triangle.fill")
+                        .font(.callout)
+                        .foregroundStyle(.orange)
+                        .textSelection(.enabled)
+                } else if let problem = state.schemeError(for: slot) {
                     Label(problem, systemImage: "exclamationmark.triangle.fill")
                         .font(.callout)
                         .foregroundStyle(.orange)
@@ -113,7 +118,9 @@ struct SlotCardView: View {
                 .buttonStyle(.borderedProminent)
                 .accessibilityLabel("Refresh \(slot.displayName)")
                 .disabled(!slot.isConfigured || state.isAnyRunning)
-                .help("Reset signing, rebuild, reinstall and relaunch on \(slot.deviceName.isEmpty ? "the device" : slot.deviceName).")
+                .help(slot.isIPA
+                      ? "Fetch a fresh profile, re-sign the .ipa, reinstall and relaunch on \(slot.deviceName.isEmpty ? "the device" : slot.deviceName)."
+                      : "Reset signing, rebuild, reinstall and relaunch on \(slot.deviceName.isEmpty ? "the device" : slot.deviceName).")
                 .keyboardShortcut(shortcutKey, modifiers: [.command])
             }
 
@@ -121,7 +128,7 @@ struct SlotCardView: View {
                 Button("Rename") { beginRenaming() }
                 Button("Clear Log") { runner.clearLog() }
                     .disabled(runner.isRunning || runner.lines.isEmpty)
-                Button("Reveal Project in Finder") {
+                Button(slot.isIPA ? "Reveal .ipa in Finder" : "Reveal Project in Finder") {
                     guard !slot.projectPath.isEmpty else { return }
                     NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: slot.projectPath)])
                 }
@@ -194,7 +201,7 @@ struct SlotCardView: View {
 
     private var pathRow: some View {
         HStack(spacing: 8) {
-            Image(systemName: slot.isWorkspace ? "square.stack.3d.up" : "hammer")
+            Image(systemName: slot.isIPA ? "shippingbox" : slot.isWorkspace ? "square.stack.3d.up" : "hammer")
                 .foregroundStyle(.secondary)
             Text(slot.projectPath.isEmpty ? "No project selected" : abbreviate(slot.projectPath))
                 .font(.system(.callout, design: .monospaced))
@@ -208,8 +215,8 @@ struct SlotCardView: View {
                 Task { await state.setProjectPath(path, for: slot) }
             }
             .disabled(runner.isRunning)
-            .accessibilityLabel("Choose a different Xcode project")
-            .help("Pick a different .xcodeproj or .xcworkspace for this slot.")
+            .accessibilityLabel("Choose a different project or .ipa")
+            .help("Pick a different .xcodeproj, .xcworkspace or .ipa for this slot.")
         }
     }
 
@@ -222,9 +229,9 @@ struct SlotCardView: View {
                 .font(.system(size: 30, weight: .light))
                 .foregroundStyle(isDropTargeted ? Color.accentColor : Color.secondary)
                 .accessibilityHidden(true)
-            Text("Drop an Xcode project here")
+            Text("Drop an Xcode project or .ipa here")
                 .font(.headline)
-            Text("An .xcodeproj or .xcworkspace, or the folder that holds one.")
+            Text("An .xcodeproj, .xcworkspace or .ipa, or the folder that holds one.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
             Button("Choose Project…") {
@@ -292,6 +299,91 @@ struct SlotCardView: View {
 
     private var settingsRow: some View {
         HStack(spacing: 12) {
+            if slot.isIPA {
+                ipaFields
+            } else {
+                schemeField
+            }
+
+            LabeledField(label: "iPhone") {
+                Picker("", selection: deviceSelection) {
+                    // A remembered device that is not currently reachable still
+                    // needs a row, or the picker would silently reset itself.
+                    if state.devices.device(withIdentifier: slot.deviceIdentifier) == nil {
+                        Text(slot.deviceName.isEmpty ? "Choose a device…" : "\(slot.deviceName) (not reachable)")
+                            .tag(slot.deviceIdentifier)
+                    }
+                    ForEach(state.devices.devices) { device in
+                        Text("\(device.name) — \(device.subtitle)").tag(device.identifier)
+                    }
+                }
+                .labelsHidden()
+                .frame(minWidth: 240)
+                .accessibilityLabel("iPhone")
+            }
+            Spacer()
+        }
+        .disabled(runner.isRunning)
+    }
+
+    /// An `.ipa` has no scheme. What it needs instead is a team to sign for,
+    /// and — because a free Apple ID cannot register a bundle id another
+    /// developer owns — usually a bundle id of its own.
+    @ViewBuilder
+    private var ipaFields: some View {
+        LabeledField(label: "Team") {
+            HStack(spacing: 6) {
+                Picker("", selection: field(\.teamID, default: "")) {
+                    if state.team(withID: slot.teamID) == nil {
+                        Text(slot.teamID.isEmpty ? "Choose a team…" : slot.teamID).tag(slot.teamID)
+                    }
+                    ForEach(state.teams) { team in
+                        Text(team.label).tag(team.id)
+                    }
+                }
+                .labelsHidden()
+                .frame(minWidth: 180)
+                .accessibilityLabel("Signing team")
+                Button {
+                    Task { await state.refreshTeams() }
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel("Reload teams")
+                .help("Re-read the teams of the Apple IDs signed in to Xcode.")
+            }
+        }
+
+        LabeledField(label: "Bundle ID") {
+            TextField("", text: field(\.bundleIDOverride, default: ""),
+                      prompt: Text(slot.sourceBundleIdentifier.isEmpty ? "Same as the .ipa"
+                                                                        : slot.sourceBundleIdentifier))
+                .textFieldStyle(.roundedBorder)
+                .font(.system(.body, design: .monospaced))
+                .frame(minWidth: 200)
+                .accessibilityLabel("Bundle ID to sign as")
+                .help("Leave empty to keep the .ipa's own bundle ID. A free Apple ID cannot use an ID "
+                      + "another developer registered, so for someone else's app pick your own, "
+                      + "e.g. com.yourname.appname.")
+        }
+    }
+
+    /// Why an `.ipa` slot cannot run yet, when it is something to fix rather
+    /// than a field still to fill in.
+    private var ipaProblem: String? {
+        guard slot.isIPA else { return nil }
+        let override = slot.bundleIDOverride.trimmingCharacters(in: .whitespaces)
+        if !override.isEmpty, !IPASigning.isValidBundleID(override) {
+            return "“\(override)” is not a valid bundle ID — letters, digits, hyphens and dots, like com.yourname.app."
+        }
+        if slot.teamID.isEmpty, state.teams.isEmpty {
+            return "No signing team found. Sign in with your Apple ID in Xcode ▸ Settings ▸ Accounts, then reload teams."
+        }
+        return nil
+    }
+
+    private var schemeField: some View {
             LabeledField(label: "Scheme") {
                 HStack(spacing: 6) {
                     Picker("", selection: field(\.scheme, default: "")) {
@@ -329,26 +421,6 @@ struct SlotCardView: View {
                     }
                 }
             }
-
-            LabeledField(label: "iPhone") {
-                Picker("", selection: deviceSelection) {
-                    // A remembered device that is not currently reachable still
-                    // needs a row, or the picker would silently reset itself.
-                    if state.devices.device(withIdentifier: slot.deviceIdentifier) == nil {
-                        Text(slot.deviceName.isEmpty ? "Choose a device…" : "\(slot.deviceName) (not reachable)")
-                            .tag(slot.deviceIdentifier)
-                    }
-                    ForEach(state.devices.devices) { device in
-                        Text("\(device.name) — \(device.subtitle)").tag(device.identifier)
-                    }
-                }
-                .labelsHidden()
-                .frame(minWidth: 240)
-                .accessibilityLabel("iPhone")
-            }
-            Spacer()
-        }
-        .disabled(runner.isRunning)
     }
 
     private var deviceSelection: Binding<String> {
@@ -383,13 +455,16 @@ struct SlotCardView: View {
                 Toggle("Clean build", isOn: field(\.cleanBuild, default: false))
                 Toggle("Launch after install", isOn: field(\.launchAfterInstall, default: true))
                 Spacer()
-                LabeledField(label: "Configuration") {
-                    Picker("", selection: field(\.configuration, default: "Debug")) {
-                        Text("Debug").tag("Debug")
-                        Text("Release").tag("Release")
+                // An .ipa is already built; there is no configuration to pick.
+                if !slot.isIPA {
+                    LabeledField(label: "Configuration") {
+                        Picker("", selection: field(\.configuration, default: "Debug")) {
+                            Text("Debug").tag("Debug")
+                            Text("Release").tag("Release")
+                        }
+                        .labelsHidden()
+                        .frame(width: 110)
                     }
-                    .labelsHidden()
-                    .frame(width: 110)
                 }
             }
             .toggleStyle(.checkbox)

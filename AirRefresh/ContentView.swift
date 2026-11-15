@@ -14,10 +14,11 @@ struct ContentView: View {
         .task {
             await state.devices.refresh()
             state.autoAssignSingleDevice()
+            await state.refreshTeams()
             // Three `xcodebuild -list` calls take a second each; there is no
             // reason to make the user watch them go one after another.
             await withTaskGroup(of: Void.self) { group in
-                for slot in state.slots where !slot.projectPath.isEmpty {
+                for slot in state.slots where !slot.projectPath.isEmpty && !slot.isIPA {
                     group.addTask { await state.loadSchemes(for: slot) }
                 }
             }

@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Added
+
+- **`.ipa` files as well as Xcode projects.** Drop one on a slot and AirRefresh
+  keeps it alive the same way: it builds a one-file helper project with the
+  same bundle id so Xcode mints a free profile, re-signs the unpacked app with
+  it, and installs it. The card asks for a **Team** (picked for you when there
+  is only one) and an optional **Bundle ID**, since a free Apple ID cannot sign
+  under an id somebody else registered. Extensions and watch apps are removed,
+  and App Store–encrypted `.ipa`s are flagged.
+- Hints for a bundle id that belongs to another developer, and for the
+  10-new-ids-a-week limit.
+
 ### Changed
 
 - **Empty slots are a drop zone.** Drag an `.xcodeproj`/`.xcworkspace` (or its
@@ -22,6 +34,35 @@
   "refreshes at 2 days left (5 now)".
 
 ### Fixed
+
+- **Stop, then Refresh straight away, could wreck the new run.** The stopped
+  task was still unwinding and wrote "Stopped" over the new run's phase,
+  cancelled its watchdog, reported `.stopped` for it and appended to its log.
+  Every write from a run is now checked against the run that owns the runner.
+- **"Change…" kept the old project's learned state.** The new project showed
+  the old one's expiry, kept its title, and counted as proven — so automation
+  could run a project nobody had refreshed by hand. All of that is now reset.
+- **Changing project while its schemes were loading** skipped the new read and
+  then pre-selected the *old* project's scheme. Scheme reads are now tracked by
+  path, and a result for a path the slot has left is thrown away.
+- **A slot refreshed with "Reset signing" off looked due again at once**, and
+  rebuilt every two hours: expiry was read from the oldest matching profile.
+  It now reads the newest, which is the one the build used.
+- **A stopped Refresh All could clear the handle of the next one**, so
+  `isAnyRunning` lied between its slots and the scheduler could start a run in
+  the gap. Refresh All also re-reads each slot as it reaches it.
+- **An archive could fail half-way without rolling back** when the second
+  profile folder's backup directory could not be created.
+- **A device scan already in flight made the scheduler think the phone was
+  gone**; a second caller now waits for that scan instead of reading an empty
+  list.
+- **"Reset Signing Only" said only "Stopped"** when Stop arrived after the
+  profiles had already moved. It now says they moved.
+- **The "different certificate" hint fired on any "mismatch"** — architecture
+  mismatches included — telling people to delete their app for no reason.
+- Errors that are not a failed process no longer start with "Could not launch
+  process:", and the finished message no longer says "running on ." without a
+  device name, or "running" when launching was turned off.
 
 - **Output from a finished command could be dropped, sometimes all of it.**
   `Shell.stream` finished from the process's termination handler while the

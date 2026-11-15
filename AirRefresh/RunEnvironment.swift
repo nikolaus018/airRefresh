@@ -46,6 +46,23 @@ struct RunEnvironment {
     /// The profile now covering a bundle id, read back after a successful build.
     var profileCovering: (String) -> ProvisioningProfile?
 
+    // MARK: .ipa slots
+
+    /// Empties a scratch directory AirRefresh owns, creating it if needed.
+    var resetDirectory: (URL) throws -> Void
+
+    /// Writes the helper project whose build mints the profile, returning
+    /// the `.xcodeproj`.
+    var writeStubProject: (IPASigning.StubProject) throws -> URL
+
+    /// Parses a single profile file — the one embedded in the helper app.
+    var readProfile: (URL) -> ProvisioningProfile?
+
+    /// Strips, re-provisions and re-identifies an unpacked `.app`.
+    var prepareForSigning: (_ app: URL, _ profile: URL, _ bundleID: String) throws -> IPASigning.PreparedApp
+
+    var writeEntitlements: (IPASigning.Entitlements, URL) throws -> Void
+
     static let live = RunEnvironment(
         stream: { Shell.stream($0, $1) },
         capture: { try await Shell.capture($0, $1) },
@@ -75,10 +92,19 @@ struct RunEnvironment {
             let data = try Data(contentsOf: plistURL)
             let plist = try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
             guard let identifier = plist?["CFBundleIdentifier"] as? String else {
-                throw ShellError.launchFailed("No CFBundleIdentifier in \(plistURL.path)")
+                throw PipelineError("No CFBundleIdentifier in \(plistURL.path)")
             }
             return identifier
         },
-        profileCovering: { ProfileInspector.profile(covering: $0) }
+        profileCovering: { ProfileInspector.profile(covering: $0) },
+        resetDirectory: { directory in
+            let fm = FileManager.default
+            if fm.fileExists(atPath: directory.path) { try fm.removeItem(at: directory) }
+            try fm.createDirectory(at: directory, withIntermediateDirectories: true)
+        },
+        writeStubProject: { try IPASigning.writeStubProject($0) },
+        readProfile: { ProfileInspector.parse($0) },
+        prepareForSigning: { try IPASigning.prepareForSigning(app: $0, profile: $1, bundleID: $2) },
+        writeEntitlements: { try IPASigning.writeEntitlements($0, to: $1) }
     )
 }

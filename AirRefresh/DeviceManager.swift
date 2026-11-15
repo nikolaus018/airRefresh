@@ -9,8 +9,24 @@ final class DeviceManager {
     private(set) var isRefreshing = false
     private(set) var lastError: String?
 
+    private var inFlight: Task<Void, Never>?
+
+    /// Asks `devicectl` again. A caller arriving while a scan is already
+    /// running waits for that scan instead of returning at once: the scheduler
+    /// used to come back immediately, take the still-empty list as the truth,
+    /// and decide the phone was not there.
     func refresh() async {
-        guard !isRefreshing else { return }
+        if let inFlight {
+            await inFlight.value
+            return
+        }
+        let scan = Task { await self.scan() }
+        inFlight = scan
+        await scan.value
+        inFlight = nil
+    }
+
+    private func scan() async {
         isRefreshing = true
         lastError = nil
         defer { isRefreshing = false }

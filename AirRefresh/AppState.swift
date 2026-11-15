@@ -25,13 +25,21 @@ final class AppState {
 
     /// Schemes discovered per slot, keyed by slot id.
     private(set) var schemes: [UUID: [String]] = [:]
-    private(set) var loadingSchemes: Set<UUID> = []
+    /// The project path each in-flight scheme read is for. A set of slot ids
+    /// used to stand in, and it turned "Change…" during a read into a no-op:
+    /// the new project's read was skipped as a duplicate, and the old one
+    /// landed afterwards and pre-selected the *old* project's scheme.
+    private(set) var loadingSchemes: [UUID: String] = [:]
+    /// Teams an `.ipa` can be signed for, from Xcode's accounts and the
+    /// profiles on disk.
+    private(set) var teams: [DevelopmentTeam] = []
     /// Why scheme discovery failed, per slot. Without this the UI just shows an
     /// empty dropdown and the user has no idea what went wrong.
     private(set) var schemeErrors: [UUID: String] = [:]
 
     private var runners: [UUID: SlotRunner] = [:]
     private var batchTask: Task<Void, Never>?
+    private var batchID: UUID?
     private let storageKey = "AirRefresh.slots.v1"
 
     init() {
@@ -81,6 +89,7 @@ final class AppState {
         runner(for: slot.id).stop()
         runners[slot.id] = nil
         schemes[slot.id] = nil
+        loadingSchemes[slot.id] = nil
         schemeErrors[slot.id] = nil
         slots.removeAll { $0.id == slot.id }
         if slots.isEmpty { slots = [ProjectSlot()] }
@@ -191,13 +200,26 @@ final class AppState {
     /// get signing failures that do not reproduce.
     func resyncAll(trigger: RunTrigger = .manual) {
         guard !isAnyRunning else { return }
+        let id = UUID()
+        batchID = id
+        let order = readySlots.map(\.id)
         batchTask = Task { [weak self] in
             guard let self else { return }
-            for slot in self.readySlots {
+            for slotID in order {
                 if Task.isCancelled { break }
+                // Read each slot fresh: a batch takes minutes, and a slot
+                // edited or removed meanwhile must not run from a stale copy.
+                guard let slot = self.slots.first(where: { $0.id == slotID }), slot.isConfigured
+                else { continue }
                 await self.startRun(slot, trigger: trigger)?.value
             }
-            self.batchTask = nil
+            // Only clear our own handle. A batch that was stopped finishes
+            // after Stop has already let a new one start, and clearing that
+            // one's handle made `isAnyRunning` lie between its slots.
+            if self.batchID == id {
+                self.batchTask = nil
+                self.batchID = nil
+            }
         }
     }
 
@@ -281,6 +303,7 @@ final class AppState {
     func stopAll() {
         batchTask?.cancel()
         batchTask = nil
+        batchID = nil
         for runner in runners.values { runner.stop() }
         maintenance.stop()
     }
@@ -301,14 +324,17 @@ final class AppState {
 
     /// Reads the scheme list straight out of the project with `xcodebuild -list`.
     func loadSchemes(for slot: ProjectSlot) async {
-        guard !slot.projectPath.isEmpty, !loadingSchemes.contains(slot.id) else { return }
-        loadingSchemes.insert(slot.id)
-        defer { loadingSchemes.remove(slot.id) }
+        let path = slot.projectPath
+        guard !path.isEmpty, !slot.isIPA, loadingSchemes[slot.id] != path else { return }
+        loadingSchemes[slot.id] = path
+        defer { if loadingSchemes[slot.id] == path { loadingSchemes[slot.id] = nil } }
 
         let result = try? await Shell.capture("/usr/bin/xcrun", [
             "xcodebuild", "-list", "-json",
-            slot.containerFlag, slot.projectPath
+            slot.containerFlag, path
         ])
+        // The slot may have moved on to another project, or gone, meanwhile.
+        guard let index = binding(for: slot), slots[index].projectPath == path else { return }
         guard let output = result?.output,
               let start = output.firstIndex(of: "{"),
               let data = String(output[start...]).data(using: .utf8),
@@ -326,8 +352,8 @@ final class AppState {
             : nil
 
         // Pre-select the obvious choice so the common case needs zero clicks.
-        if let index = binding(for: slot), slots[index].scheme.isEmpty {
-            let projectName = URL(fileURLWithPath: slot.projectPath)
+        if slots[index].scheme.isEmpty {
+            let projectName = URL(fileURLWithPath: path)
                 .deletingPathExtension().lastPathComponent
             slots[index].scheme = found.first { $0 == projectName } ?? found.first ?? ""
         }
@@ -337,7 +363,7 @@ final class AppState {
     /// Whether the scheme list has been read at all — until it has, a saved
     /// scheme missing from it proves nothing.
     func hasLoadedSchemes(_ slot: ProjectSlot) -> Bool { schemes[slot.id] != nil }
-    func isLoadingSchemes(_ slot: ProjectSlot) -> Bool { loadingSchemes.contains(slot.id) }
+    func isLoadingSchemes(_ slot: ProjectSlot) -> Bool { loadingSchemes[slot.id] != nil }
     func schemeError(for slot: ProjectSlot) -> String? { schemeErrors[slot.id] }
 
     /// Boils xcodebuild's complaint down to the one line worth putting on screen.
@@ -360,17 +386,77 @@ final class AppState {
     /// Applies a newly chosen project path and refreshes everything derived from it.
     func setProjectPath(_ path: String, for slot: ProjectSlot) async {
         guard let index = binding(for: slot) else { return }
-        slots[index].projectPath = path
-        slots[index].scheme = ""
-        schemeErrors[slot.id] = nil
-        if slots[index].name.isEmpty {
-            slots[index].name = URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
+        let previous = slots[index]
+        if previous.projectPath != path {
+            var updated = previous
+            updated.projectPath = path
+            Self.forgetLearnedState(&updated, previousPath: previous.projectPath)
+            slots[index] = updated
+            schemes[slot.id] = nil
+            schemeErrors[slot.id] = nil
+            scheduler.clearBackoff(slot.id)
         }
         // Default to the only device if there is exactly one.
         if slots[index].deviceIdentifier.isEmpty, devices.devices.count == 1, let only = devices.devices.first {
             apply(device: only, toSlotAt: index)
         }
-        await loadSchemes(for: slots[index])
+
+        if slots[index].isIPA {
+            await prepareIPASlot(id: slot.id, path: path)
+        } else {
+            await loadSchemes(for: slots[index])
+        }
+    }
+
+    /// What a slot knew about its old project, wiped when it gets a new one.
+    ///
+    /// "Change…" used to keep all of it. The new project inherited the old
+    /// one's bundle id, expiry and last success — so it showed somebody
+    /// else's signing health, and counted as proven, which let automation
+    /// run a project nobody had ever refreshed by hand. And since the old
+    /// file name had been copied into `name`, the card kept the old title.
+    nonisolated static func forgetLearnedState(_ slot: inout ProjectSlot, previousPath: String) {
+        slot.scheme = ""
+        slot.bundleIdentifier = ""
+        slot.sourceBundleIdentifier = ""
+        slot.bundleIDOverride = ""
+        slot.profileExpiresAt = nil
+        slot.lastSuccessAt = nil
+        let previousName = URL(fileURLWithPath: previousPath).deletingPathExtension().lastPathComponent
+        // A name the user typed stays. One that was only ever the file name
+        // goes, so the card falls back to the new file's name.
+        if slot.name == previousName { slot.name = "" }
+    }
+
+    /// Reads the bundle id out of a freshly picked `.ipa` and, with only one
+    /// team on this Mac, picks it.
+    private func prepareIPASlot(id: UUID, path: String) async {
+        if teams.isEmpty { await refreshTeams() }
+        if let index = slots.firstIndex(where: { $0.id == id }), slots[index].teamID.isEmpty,
+           let team = Self.obviousTeam(teams) {
+            slots[index].teamID = team.id
+        }
+        let source = await IPASigning.sourceBundleIdentifier(ofIPA: URL(fileURLWithPath: path)) ?? ""
+        guard let index = slots.firstIndex(where: { $0.id == id }), slots[index].projectPath == path
+        else { return }
+        slots[index].sourceBundleIdentifier = source
+    }
+
+    /// Re-reads which teams this Mac can sign for. Off the main actor: it
+    /// parses every provisioning profile on disk.
+    func refreshTeams() async {
+        let found = await Task.detached(priority: .utility) { TeamDirectory.discover() }.value
+        if found != teams { teams = found }
+    }
+
+    func team(withID id: String) -> DevelopmentTeam? { teams.first { $0.id == id } }
+
+    /// The only team, or the only free one — the case for nearly everybody
+    /// using AirRefresh. Anything more ambiguous is the user's call.
+    nonisolated static func obviousTeam(_ teams: [DevelopmentTeam]) -> DevelopmentTeam? {
+        if teams.count == 1 { return teams[0] }
+        let free = teams.filter(\.isFree)
+        return free.count == 1 ? free[0] : nil
     }
 
     /// With a single paired iPhone there is nothing to choose, so fill it in.

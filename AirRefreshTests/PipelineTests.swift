@@ -378,10 +378,3 @@ struct PipelineTests {
     }
 }
 
-private extension SyncPhase {
-    /// `.succeeded` carries a timestamp there is no reason to assert on.
-    var isSuccess: Bool {
-        if case .succeeded = self { return true }
-        return false
-    }
-}

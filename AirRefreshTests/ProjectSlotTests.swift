@@ -52,7 +52,7 @@ struct ProjectSlotTests {
 
     @Test func aSlotKnowsWhatItIsStillMissing() {
         var slot = ProjectSlot()
-        #expect(slot.configurationHint == "Choose an .xcodeproj or .xcworkspace")
+        #expect(slot.configurationHint == "Choose an .xcodeproj, .xcworkspace or .ipa")
         slot.projectPath = "/Users/me/Notes/Notes.xcodeproj"
         #expect(slot.configurationHint == "Pick a scheme")
         slot.scheme = "Notes"

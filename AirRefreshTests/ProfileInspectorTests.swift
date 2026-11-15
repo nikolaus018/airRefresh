@@ -103,8 +103,9 @@ struct ProfileInspectorTests {
         // `installedProfiles()` hands them over soonest-expiry first.
         let installed = [wildcard, soon, later]
 
-        // An exact match wins even though the wildcard expires sooner.
-        #expect(ProfileInspector.best(covering: "com.example.Notes", among: installed) == soon)
+        // An exact match wins over the wildcard, and of two exact matches the
+        // newer profile is the one the installed app was signed with.
+        #expect(ProfileInspector.best(covering: "com.example.Notes", among: installed) == later)
         // Nothing exact: the wildcard is the answer.
         #expect(ProfileInspector.best(covering: "com.other.App", among: installed) == wildcard)
         // And an empty bundle id matches nothing at all, wildcard included.

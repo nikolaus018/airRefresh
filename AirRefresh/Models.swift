@@ -1,11 +1,12 @@
 import Foundation
 
-/// One of the (at most three) Xcode projects AirRefresh can push to a device.
+/// One of the (at most three) apps AirRefresh can push to a device — built
+/// from an Xcode project, or re-signed from a ready-made `.ipa`.
 struct ProjectSlot: Identifiable, Codable, Hashable {
 
     var id: UUID = UUID()
     var name: String = ""
-    /// Absolute path to an `.xcodeproj` or `.xcworkspace`.
+    /// Absolute path to an `.xcodeproj`, `.xcworkspace` or `.ipa`.
     var projectPath: String = ""
     var scheme: String = ""
     var configuration: String = "Debug"
@@ -27,8 +28,30 @@ struct ProjectSlot: Identifiable, Codable, Hashable {
     var profileExpiresAt: Date?
     var lastSuccessAt: Date?
 
+    // MARK: .ipa slots
+
+    /// The development team an `.ipa` is re-signed for. A project carries its
+    /// own team in its build settings; an `.ipa` has nothing we could use.
+    var teamID: String = ""
+    /// Signs the `.ipa` under a different bundle id. A free Apple ID cannot
+    /// register an id another team already owns — which is every id of an app
+    /// somebody else published — so this is usually needed.
+    var bundleIDOverride: String = ""
+    /// `CFBundleIdentifier` as it ships inside the `.ipa`, read when it is picked.
+    var sourceBundleIdentifier: String = ""
+
+    var isIPA: Bool { projectPath.lowercased().hasSuffix(".ipa") }
+
+    /// The bundle id an `.ipa` slot will be signed as, when it can be known
+    /// without unpacking it.
+    var ipaTargetBundleID: String {
+        let override = bundleIDOverride.trimmingCharacters(in: .whitespaces)
+        return override.isEmpty ? sourceBundleIdentifier : override
+    }
+
     var isConfigured: Bool {
-        !projectPath.isEmpty && !scheme.isEmpty && !deviceIdentifier.isEmpty
+        guard !projectPath.isEmpty, !deviceIdentifier.isEmpty else { return false }
+        return isIPA ? !teamID.isEmpty : !scheme.isEmpty
     }
 
     var displayName: String {
@@ -64,6 +87,9 @@ struct ProjectSlot: Identifiable, Codable, Hashable {
         bundleIdentifier = value(.bundleIdentifier, "")
         profileExpiresAt = try? container.decodeIfPresent(Date.self, forKey: .profileExpiresAt)
         lastSuccessAt = try? container.decodeIfPresent(Date.self, forKey: .lastSuccessAt)
+        teamID = value(.teamID, "")
+        bundleIDOverride = value(.bundleIDOverride, "")
+        sourceBundleIdentifier = value(.sourceBundleIdentifier, "")
     }
 
     var containerFlag: String { isWorkspace ? "-workspace" : "-project" }
@@ -126,8 +152,12 @@ struct ProjectSlot: Identifiable, Codable, Hashable {
 
     /// What is still missing before this slot can run.
     var configurationHint: String? {
-        if projectPath.isEmpty { return "Choose an .xcodeproj or .xcworkspace" }
-        if scheme.isEmpty { return "Pick a scheme" }
+        if projectPath.isEmpty { return "Choose an .xcodeproj, .xcworkspace or .ipa" }
+        if isIPA {
+            if teamID.isEmpty { return "Pick the team to sign with" }
+        } else if scheme.isEmpty {
+            return "Pick a scheme"
+        }
         if deviceIdentifier.isEmpty { return "Pick a device" }
         return nil
     }
@@ -157,6 +187,10 @@ enum SyncPhase: Equatable {
     case preparing
     case resettingSigning
     case building
+    /// `.ipa` slots: having Xcode mint a profile for the bundle id.
+    case fetchingProfile
+    /// `.ipa` slots: signing the unpacked app with that profile.
+    case resigning
     case installing
     case launching
     case succeeded(Date)
@@ -165,7 +199,8 @@ enum SyncPhase: Equatable {
 
     var isRunning: Bool {
         switch self {
-        case .preparing, .resettingSigning, .building, .installing, .launching: return true
+        case .preparing, .resettingSigning, .building, .fetchingProfile, .resigning,
+             .installing, .launching: return true
         default: return false
         }
     }
@@ -178,9 +213,11 @@ enum SyncPhase: Equatable {
     var label: String {
         switch self {
         case .idle: return "Idle"
-        case .preparing: return "Checking project…"
+        case .preparing: return "Preparing…"
         case .resettingSigning: return "Resetting signing…"
         case .building: return "Building…"
+        case .fetchingProfile: return "Fetching profile…"
+        case .resigning: return "Re-signing…"
         case .installing: return "Installing…"
         case .launching: return "Launching…"
         case .succeeded: return "On device"
