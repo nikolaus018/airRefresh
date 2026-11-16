@@ -1,23 +1,21 @@
-<div align="center">
-
-<img src="AirRefresh/Assets.xcassets/AppIcon.appiconset/icon_256x256.png" width="128" alt="AirRefresh icon">
-
-# AirRefresh
-
-**Apps you sign with a free Apple ID stop opening after 7 days.<br>AirRefresh re-signs them before that happens — on its own.**
+﻿# AirRefresh
 
 [![CI](https://github.com/nikolaus018/airRefresh/actions/workflows/ci.yml/badge.svg)](https://github.com/nikolaus018/airRefresh/actions/workflows/ci.yml)
 ![macOS 14+](https://img.shields.io/badge/macOS-14%2B-blue)
 ![Swift 5](https://img.shields.io/badge/Swift-5-orange)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-A menu-bar app for macOS that keeps up to three apps signed and installed on
-your iPhone — built from your **Xcode projects** or re-signed from **`.ipa`
-files** — with one button, or with no button at all.
+macOS menu-bar app that keeps up to three iOS apps signed and installed on an iPhone
+under a free Apple ID, whose provisioning profiles expire after 7 days. Apps are
+built from Xcode projects or re-signed from `.ipa` files, on demand or automatically
+before the profile expires.
 
-</div>
-
----
+```mermaid
+flowchart LR
+    A[Reset signing<br/>move app's profiles to backup] --> B[Build with<br/>-allowProvisioningUpdates]
+    B --> C[Install<br/>devicectl]
+    C --> D[Launch]
+```
 
 ## Contents
 
@@ -37,21 +35,19 @@ files** — with one button, or with no button at all.
 
 ## Why
 
-With a free Apple ID, every provisioning profile Xcode gives you **expires
-after 7 days**. One morning the app you built for yourself just won't open. The
-fix is always the same:
+Provisioning profiles issued to a free Apple ID **expire after 7 days**, after
+which the app no longer launches. Renewing means:
 
-1. throw away the stale profiles,
-2. rebuild with `-allowProvisioningUpdates` so Xcode makes new ones,
-3. reinstall on the phone.
+1. removing the stale profiles,
+2. rebuilding with `-allowProvisioningUpdates` so Xcode issues new ones,
+3. reinstalling on the device.
 
-That takes a couple of minutes, and you have to remember it every week for
-every app. AirRefresh puts the whole routine behind one button, and can run it
-for you at 3am, before the profile runs out.
+AirRefresh runs this sequence from one button, or on a schedule before the
+profile expires.
 
-> **Who this is for:** anyone putting their own apps on their own iPhone
-> without paying $99 a year. With a paid developer account, profiles last a
-> year and you don't need this.
+> **Intended for** developers installing their own apps on their own iPhone
+> without a paid developer account. Paid accounts get year-long profiles and do
+> not need this.
 
 ## Features
 
@@ -96,8 +92,8 @@ When a [release](https://github.com/nikolaus018/airRefresh/releases) is
 published, download `AirRefresh-<version>.zip`, unzip it and drag
 `AirRefresh.app` to `/Applications`.
 
-The app isn't signed with a paid developer certificate (it would be odd for
-this app to need one), so macOS blocks it the first time. Either right-click
+The app is not signed with a paid developer certificate, so macOS blocks it the
+first time. Either right-click
 the app ▸ **Open** ▸ **Open**, or run:
 
 ```bash
